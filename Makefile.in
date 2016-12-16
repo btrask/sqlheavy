@@ -61,7 +61,7 @@ TCC += -DSQLITE_THREADSAFE=@SQLITE_THREADSAFE@
 
 # Any target libraries which libsqlite must be linked against
 # 
-TLIBS = @LIBS@
+TLIBS = @LIBS@ -lkvstore -lcrypto -lstdc++
 
 # Flags controlling use of the in memory btree implementation
 #
