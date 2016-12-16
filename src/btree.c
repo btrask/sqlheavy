@@ -1875,15 +1875,13 @@ int sqlite3BtreeSetSafetyLevel(
   int fullSync,          /* PRAGMA fullfsync. */
   int ckptFullSync       /* PRAGMA checkpoint_fullfync */
 ){
-  int onoff;
-  if (level < 2)
-    onoff = 1;
-  else
-    onoff = 0;
-//  mdb_env_set_flags(p->pBt->env, MDB_NOSYNC, onoff);
-// TODO
-  LOG("done",0);
-  return SQLITE_OK;
+	unsigned flags = 0;
+	db_env_get_config(p->pBt->env, DB_CFG_FLAGS, &flags);
+	if(level < 2) flags |= DB_NOSYNC;
+	else flags &= ~DB_NOSYNC;
+	int rc = db_env_set_config(p->pBt->env, DB_CFG_FLAGS, &flags);
+	LOG("done", 0);
+	return SQLITE_OK;
 }
 #endif
 
@@ -1906,10 +1904,10 @@ void sqlite3BtreeCursorHints(BtCursor *pCsr, unsigned int mask) {
 ** words, return TRUE if no sync() occurs on the disk files.
 */
 int sqlite3BtreeSyncDisabled(Btree *p){
-  unsigned int flags;
-  LOG("done",0);
-//  mdb_env_get_flags(p->pBt->env, &flags);
-  return 0; //(flags & MDB_NOSYNC) != 0;
+	unsigned flags = 0;
+	LOG("done",0);
+	db_env_get_config(p->pBt->env, DB_CFG_FLAGS, &flags);
+	return (flags & DB_NOSYNC) != 0;
 }
 
 /*
