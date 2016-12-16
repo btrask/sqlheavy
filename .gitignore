@@ -31,5 +31,6 @@ sqlite3.pc
 sqlite3ext.h
 test.db
 test.db/
+test.db-lock
 tsrc/
 
