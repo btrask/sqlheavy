@@ -1539,7 +1539,7 @@ int sqlite3BtreeOpen(
   Btree *p;
   BtShared *pBt;
   sqlite3_mutex *mutexOpen = NULL;
-  int eflags, rc = SQLITE_OK;
+  int eflags = 0, rc = SQLITE_OK;
   char dirPathBuf[BT_MAX_PATH], *dirPathName = dirPathBuf;
 
   if ((p = (Btree *)sqlite3_malloc(sizeof(Btree))) == NULL) {
