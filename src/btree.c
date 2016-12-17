@@ -415,54 +415,54 @@ cleanup:
 ** Close an open database and invalidate all cursors.
 */
 int sqlite3BtreeClose(Btree *p){
-  BtShared *pBt = p->pBt;
-  BtCursor *pCur;
-  sqlite3_mutex *mutexOpen;
+	BtShared *pBt = p->pBt;
+	BtCursor *pCur;
+	sqlite3_mutex *mutexOpen;
 
-  /* Close all cursors opened via this handle. */
-  pCur = p->pCursor;
-  while (pCur) {
-    BtCursor *pTmp = pCur;
-    pCur = pCur->pNext;
-    sqlite3BtreeCloseCursor(pTmp);
-  }
-
-  /* Abort any active transaction */
-  db_txn_abort(p->main_txn);
-
-  if (p->isTemp) {
-	  unlink(pBt->filename);
-	  unlink(pBt->lockname);
-	  sqlite3_free(pBt->filename);
-	  sqlite3_free(pBt->lockname);
-	db_env_close(pBt->env);
-	sqlite3_free(pBt);
-  } else {
-	mutexOpen = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_OPEN);
-	sqlite3_mutex_enter(mutexOpen);
-	if (--pBt->nRef == 0) {
-	  BtShared **prev;
-	  if (pBt->xFreeSchema && pBt->pSchema)
-		pBt->xFreeSchema(pBt->pSchema);
-	  sqlite3DbFree(0, pBt->pSchema);
-	  db_env_close(pBt->env);
-	  prev = &sqlite3SharedCacheList;
-	  while (*prev != pBt) prev = &(*prev)->pNext;
-	  *prev = pBt->pNext;
-	  sqlite3_free(pBt->filename);
-	  sqlite3_free(pBt->lockname);
-	  sqlite3_free(pBt);
-	} else {
-      Btree **prev;
-	  prev = &pBt->trees;
-	  while (*prev != p) prev = &(*prev)->pNext;
-	  *prev = p->pNext;
+	/* Close all cursors opened via this handle. */
+	pCur = p->pCursor;
+	while (pCur) {
+		BtCursor *pTmp = pCur;
+		pCur = pCur->pNext;
+		sqlite3BtreeCloseCursor(pTmp);
 	}
-	sqlite3_mutex_leave(mutexOpen);
-  }
-  sqlite3_free(p);
-  LOG("done",0);
-  return SQLITE_OK;
+
+	/* Abort any active transaction */
+	db_txn_abort(p->main_txn);
+
+	if (p->isTemp) {
+		unlink(pBt->filename);
+		unlink(pBt->lockname);
+		sqlite3_free(pBt->filename);
+		sqlite3_free(pBt->lockname);
+		db_env_close(pBt->env);
+		sqlite3_free(pBt);
+	} else {
+		mutexOpen = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_OPEN);
+		sqlite3_mutex_enter(mutexOpen);
+		if (--pBt->nRef == 0) {
+			BtShared **prev;
+			if (pBt->xFreeSchema && pBt->pSchema)
+				pBt->xFreeSchema(pBt->pSchema);
+			sqlite3DbFree(0, pBt->pSchema);
+			db_env_close(pBt->env);
+			prev = &sqlite3SharedCacheList;
+			while (*prev != pBt) prev = &(*prev)->pNext;
+			*prev = pBt->pNext;
+			sqlite3_free(pBt->filename);
+			sqlite3_free(pBt->lockname);
+			sqlite3_free(pBt);
+		} else {
+			Btree **prev;
+			prev = &pBt->trees;
+			while (*prev != p) prev = &(*prev)->pNext;
+			*prev = p->pNext;
+		}
+		sqlite3_mutex_leave(mutexOpen);
+	}
+	sqlite3_free(p);
+	LOG("done",0);
+	return SQLITE_OK;
 }
 
 /*
@@ -1536,95 +1536,98 @@ int sqlite3BtreeOpen(
   int flags,              /* Options */
   int vfsFlags            /* Flags passed through to sqlite3_vfs.xOpen() */
 ){
-  Btree *p;
-  BtShared *pBt;
-  sqlite3_mutex *mutexOpen = NULL;
-  int eflags = 0, rc = SQLITE_OK;
-  char dirPathBuf[BT_MAX_PATH], *dirPathName = dirPathBuf;
+	Btree *p;
+	BtShared *pBt;
+	sqlite3_mutex *mutexOpen = NULL;
+	int eflags = 0, rc = SQLITE_OK;
+	char dirPathBuf[BT_MAX_PATH], *dirPathName = dirPathBuf;
 
-  if ((p = (Btree *)sqlite3_malloc(sizeof(Btree))) == NULL) {
-    rc = SQLITE_NOMEM;
-	goto done;
-  }
-  p->db = db;
-  p->pCursor = NULL;
-  p->main_txn = NULL;
-  p->curr_txn = NULL;
-  p->inTrans = TRANS_NONE;
-  p->isTemp = 0;
-  p->locked = 0;
-  p->wantToLock = 0;
-  /* Transient and in-memory are all the same, use /tmp */
-  if ((vfsFlags & SQLITE_OPEN_TRANSIENT_DB) || !zFilename || !zFilename[0] ||
-	!strcmp(zFilename, ":memory:")) {
-	char *envpath;
-	p->isTemp = 1;
-	envpath = tempnam(NULL, "kvs.");
-	strcpy(dirPathBuf, envpath);
-	free(envpath);
-  } else {
-	sqlite3OsFullPathname(pVfs, zFilename, sizeof(dirPathBuf), dirPathName);
-    mutexOpen = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_OPEN);
-	sqlite3_mutex_enter(mutexOpen);
-	for (pBt = sqlite3SharedCacheList; pBt; pBt = pBt->pNext) {
-		if (pBt->env && !strcmp(pBt->filename, dirPathName)) {
-			p->pBt = pBt;
-			pBt->nRef++;
-			break;
+	if ((p = (Btree *)sqlite3_malloc(sizeof(Btree))) == NULL) {
+		rc = SQLITE_NOMEM;
+		goto done;
+	}
+	p->db = db;
+	p->pCursor = NULL;
+	p->main_txn = NULL;
+	p->curr_txn = NULL;
+	p->inTrans = TRANS_NONE;
+	p->isTemp = 0;
+	p->locked = 0;
+	p->wantToLock = 0;
+	/* Transient and in-memory are all the same, use /tmp */
+	if ((vfsFlags & SQLITE_OPEN_TRANSIENT_DB) || !zFilename || !zFilename[0] ||
+			!strcmp(zFilename, ":memory:")) {
+		char *envpath;
+		p->isTemp = 1;
+		envpath = tempnam(NULL, "kvs.");
+		strcpy(dirPathBuf, envpath);
+		free(envpath);
+	} else {
+		sqlite3OsFullPathname(pVfs, zFilename, sizeof(dirPathBuf), dirPathName);
+		mutexOpen = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_OPEN);
+		sqlite3_mutex_enter(mutexOpen);
+		struct stat stats[1];
+		if(stat(dirPathName, stats) >= 0) {
+			for (pBt = sqlite3SharedCacheList; pBt; pBt = pBt->pNext) {
+				if (pBt->env && !strcmp(pBt->filename, dirPathName)) {
+					p->pBt = pBt;
+					pBt->nRef++;
+					break;
+				}
+			}
+			if (pBt) {
+				p->pNext = pBt->trees;
+				pBt->trees = p;
+				pBt->nRef++;
+				sqlite3_mutex_leave(mutexOpen);
+				*ppBtree = p;
+				goto done;
+			}
 		}
 	}
-	if (pBt) {
-	  p->pNext = pBt->trees;
-	  pBt->trees = p;
-	  pBt->nRef++;
-	  sqlite3_mutex_leave(mutexOpen);
-	  *ppBtree = p;
-	  goto done;
-	}
-  }
 	pBt = sqlite3_malloc(sizeof(BtShared));
 	if (!pBt) {
-	  if (!p->isTemp) {
-	    sqlite3_mutex_leave(mutexOpen);
-	  }
-	  rc = SQLITE_NOMEM;
-	  goto done;
+		if (!p->isTemp) {
+			sqlite3_mutex_leave(mutexOpen);
+		}
+		rc = SQLITE_NOMEM;
+		goto done;
 	}
-	rc = db_env_create_base(p->isTemp ? "mdb" : "leveldb", &pBt->env);
-//	rc = db_env_create_base("mdb", &pBt->env);
+//	rc = db_env_create_base(p->isTemp ? "mdb" : "leveldb", &pBt->env);
+	rc = db_env_create_base("mdb", &pBt->env);
 	if (rc) {
-	  if (!p->isTemp) {
-	    sqlite3_mutex_leave(mutexOpen);
-	  }
-	  rc = errmap(rc);
-	  goto done;
+		if (!p->isTemp) {
+			sqlite3_mutex_leave(mutexOpen);
+		}
+		rc = errmap(rc);
+		goto done;
 	}
 	size_t mapsize = 256*1048576;
 	db_env_set_config(pBt->env, DB_CFG_MAPSIZE, &mapsize);
 	if (vfsFlags & SQLITE_OPEN_READONLY)
-	  eflags |= DB_RDONLY;
+		eflags |= DB_RDONLY;
 	if (vfsFlags & (SQLITE_OPEN_DELETEONCLOSE|SQLITE_OPEN_TEMP_DB|
-	  SQLITE_OPEN_TRANSIENT_DB))
-	  eflags |= DB_NOSYNC;
+		SQLITE_OPEN_TRANSIENT_DB))
+		eflags |= DB_NOSYNC;
 	rc = db_env_open(pBt->env, dirPathName, eflags, SQLITE_DEFAULT_FILE_PERMISSIONS);
 	if (rc) {
-	  if (!p->isTemp)
-	    sqlite3_mutex_leave(mutexOpen);
-	  rc = errmap(rc);
-	  goto done;
+		if (!p->isTemp)
+			sqlite3_mutex_leave(mutexOpen);
+		rc = errmap(rc);
+		goto done;
 	}
 	{
-	  int len = strlen(dirPathName);
-	  pBt->filename = sqlite3_malloc(len+1);
-	  pBt->lockname = sqlite3_malloc(len + sizeof(LOCKSUFF));
-	  if (!pBt->filename || !pBt->lockname) {
-	    if (!p->isTemp)
-	        sqlite3_mutex_leave(mutexOpen);
-		rc = SQLITE_NOMEM;
-		goto done;
-	  }
-	  sprintf(pBt->filename, "%s", dirPathName);
-	  sprintf(pBt->lockname, "%s" LOCKSUFF, dirPathName);
+		int len = strlen(dirPathName);
+		pBt->filename = sqlite3_malloc(len+1);
+		pBt->lockname = sqlite3_malloc(len + sizeof(LOCKSUFF));
+		if (!pBt->filename || !pBt->lockname) {
+			if (!p->isTemp)
+				sqlite3_mutex_leave(mutexOpen);
+			rc = SQLITE_NOMEM;
+			goto done;
+		}
+		sprintf(pBt->filename, "%s", dirPathName);
+		sprintf(pBt->lockname, "%s" LOCKSUFF, dirPathName);
 	}
 	pBt->db = db;
 	pBt->openFlags = flags;
@@ -1636,9 +1639,9 @@ int sqlite3BtreeOpen(
 	pBt->pWriter = NULL;
 	if (p->isTemp) {
 	} else {
-	  pBt->pNext = sqlite3SharedCacheList;
-	  sqlite3SharedCacheList = pBt;
-	  sqlite3_mutex_leave(mutexOpen);
+		pBt->pNext = sqlite3SharedCacheList;
+		sqlite3SharedCacheList = pBt;
+		sqlite3_mutex_leave(mutexOpen);
 	}
 	p->pNext = NULL;
 	pBt->trees = p;
@@ -1646,8 +1649,8 @@ int sqlite3BtreeOpen(
 	*ppBtree = p;
 
 done:
-  LOG("rc=%d",rc);
-  return rc;;
+	LOG("rc=%d",rc);
+	return rc;;
 }
 
 /*
