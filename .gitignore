@@ -34,3 +34,6 @@ test.db/
 test.db-lock
 tsrc/
 
+test.db-wal
+test_sv.db
+test_sv.db-wal
