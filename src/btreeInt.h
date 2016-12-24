@@ -1,5 +1,5 @@
 #include "sqliteInt.h"
-#include <kvstore/db_base.h>
+#include <kvstore/kvs_base.h>
 
 /* A Btree handle
 **
@@ -26,8 +26,8 @@ struct Btree {
   sqlite3 *db;       /* The database connection holding this btree */
   BtShared *pBt;     /* Sharable content of this btree */
   BtCursor *pCursor;
-  DB_txn *main_txn;
-  DB_txn *curr_txn;
+  KVS_txn *main_txn;
+  KVS_txn *curr_txn;
   u8 inTrans;        /* TRANS_NONE, TRANS_READ or TRANS_WRITE */
   u8 locked;         /* True if db currently has pBt locked */
   u8 isTemp;		 /* a temporary DB */
@@ -85,7 +85,7 @@ struct Btree {
 struct BtShared {
   sqlite3 *db;          /* Database connection currently using this Btree */
   Btree *trees;			/* All Btree handles using this struct */
-  DB_env *env;
+  KVS_env *env;
   char *filename;
   char *lockname;		/* name of MDB lockfile */
   u8 openFlags;         /* Flags to sqlite3BtreeOpen() */
@@ -124,8 +124,8 @@ struct BtCursor {
   Btree *pBtree;
   struct KeyInfo *pKeyInfo; /* Argument passed to comparison function */
   sqlite3_int64 cachedRowid; /* Next rowid cache.  0 means not valid */
-  DB_cursor *cursor;
-//  DB_val index;		/* reconstructed Index key */
+  KVS_cursor *cursor;
+//  KVS_val index;		/* reconstructed Index key */
   int iTable;
 };
 

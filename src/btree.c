@@ -1,8 +1,8 @@
 #include "btreeInt.h"
 #include "vdbeInt.h"
-#include <kvstore/db_base.h>
+#include <kvstore/kvs_base.h>
 #undef NDEBUG // TODO
-#include <kvstore/db_schema.h>
+#include <kvstore/kvs_schema.h>
 #define NDEBUG 1
 
 #if 0
@@ -39,19 +39,19 @@ struct BtShared *sqlite3SharedCacheList = NULL;
 #define BTREE_ZERODATA BTREE_BLOBKEY
 
 // TODO: MASSIVE HACKS
-static void db_bind_sint64(DB_val *const val, int64_t const x) {
-	db_bind_uint64(val, x >= 0);
-	db_bind_uint64(val, x >= 0 ? x : -x);
+static void kvs_bind_sint64(KVS_val *const val, int64_t const x) {
+	kvs_bind_uint64(val, x >= 0);
+	kvs_bind_uint64(val, x >= 0 ? x : -x);
 }
-static int64_t db_read_sint64(DB_val *const val) {
-	uint64_t a = db_read_uint64(val);
-	uint64_t b = db_read_uint64(val);
-	db_assert(a <= 1);
-	db_assert(b <= INT64_MAX);
+static int64_t kvs_read_sint64(KVS_val *const val) {
+	uint64_t a = kvs_read_uint64(val);
+	uint64_t b = kvs_read_uint64(val);
+	kvs_assert(a <= 1);
+	kvs_assert(b <= INT64_MAX);
 	return a ? (int64_t)b : -(int64_t)b;
 }
-static void db_bind_double(DB_val *const val, double const x) {
-	db_bind_sint64(val, 1000000000.0*x);
+static void kvs_bind_double(KVS_val *const val, double const x) {
+	kvs_bind_sint64(val, 1000000000.0*x);
 };
 
 enum {
@@ -70,7 +70,7 @@ static int errmap(int err)
   case EACCES:
 	return SQLITE_READONLY;
   case EIO:
-  case DB_PANIC:
+  case KVS_PANIC:
     return SQLITE_IOERR;
   case EPERM:
     return SQLITE_PERM;
@@ -79,23 +79,23 @@ static int errmap(int err)
   case ENOENT:
     return SQLITE_CANTOPEN;
   case ENOSPC:
-  case DB_MAP_FULL:
+  case KVS_MAP_FULL:
     return SQLITE_FULL;
-  case DB_NOTFOUND:
+  case KVS_NOTFOUND:
     return SQLITE_NOTFOUND;
-  case DB_VERSION_MISMATCH:
-  case DB_INVALID:
+  case KVS_VERSION_MISMATCH:
+  case KVS_INVALID:
     return SQLITE_NOTADB;
-//  case DB_PAGE_NOTFOUND:
-  case DB_CORRUPTED:
+//  case KVS_PAGE_NOTFOUND:
+  case KVS_CORRUPTED:
     return SQLITE_CORRUPT_BKPT;
-//  case DB_INCOMPATIBLE:
+//  case KVS_INCOMPATIBLE:
 //    return SQLITE_SCHEMA;
-//  case DB_BAD_RSLOT:
+//  case KVS_BAD_RSLOT:
 //    return SQLITE_MISUSE;
-  case DB_BAD_TXN:
+  case KVS_BAD_TXN:
     return SQLITE_ABORT;
-  case DB_BAD_VALSIZE:
+  case KVS_BAD_VALSIZE:
     return SQLITE_TOOBIG;
   default:
     return SQLITE_INTERNAL;
@@ -103,9 +103,9 @@ static int errmap(int err)
 }
 
 #define BTREE_TABLE_RANGE(range, table) \
-	DB_RANGE_STORAGE(range, DB_VARINT_MAX); \
-	db_bind_uint64((range)->min, TABLE_START + (table)); \
-	db_range_genmax((range));
+	KVS_RANGE_STORAGE(range, KVS_VARINT_MAX); \
+	kvs_bind_uint64((range)->min, TABLE_START + (table)); \
+	kvs_range_genmax((range));
 
 static int BtreeTableSchema(Btree *const p, int const iTable, int *const flags) {
 	assert(p);
@@ -115,13 +115,13 @@ static int BtreeTableSchema(Btree *const p, int const iTable, int *const flags) 
 		*flags = BTREE_INTKEY;
 		return 0;
 	}
-	DB_val key[1], val[1];
-	DB_VAL_STORAGE(key, DB_VARINT_MAX*2);
-	db_bind_uint64(key, TABLE_SCHEMA);
-	db_bind_uint64(key, iTable);
-	int rc = db_get(p->curr_txn, key, val);
+	KVS_val key[1], val[1];
+	KVS_VAL_STORAGE(key, KVS_VARINT_MAX*2);
+	kvs_bind_uint64(key, TABLE_SCHEMA);
+	kvs_bind_uint64(key, iTable);
+	int rc = kvs_get(p->curr_txn, key, val);
 	if(rc < 0) return errmap(rc);
-	uint64_t x = db_read_uint64(val);
+	uint64_t x = kvs_read_uint64(val);
 	assert(x <= INT_MAX);
 	*flags = x;
 	return 0;
@@ -146,7 +146,7 @@ static int BtreeTableSchema(Btree *const p, int const iTable, int *const flags) 
 ** using the sqlite3BtreeSavepoint() function.
 */
 int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
-  DB_txn *txn;
+  KVS_txn *txn;
   BtShared *pBt = p->pBt;
   int rc;
   sqlite3BtreeEnter(p);
@@ -159,7 +159,7 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
   ** SQL statements. It is illegal to open, release or rollback any
   ** such savepoints while the statement transaction savepoint is active.
   */
-  rc = db_txn_begin(pBt->env, p->curr_txn, 0, &txn);
+  rc = kvs_txn_begin(pBt->env, p->curr_txn, 0, &txn);
   if (rc == 0)
 	p->curr_txn = txn;
   sqlite3BtreeLeave(p);
@@ -189,7 +189,7 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
 **      sqlite3BtreeUpdateMeta()
 */
 int sqlite3BtreeBeginTrans(Btree *p, int wrflag){
-	DB_txn *txn, *rtxn = NULL;
+	KVS_txn *txn, *rtxn = NULL;
 	BtShared *pBt = p->pBt;
 	int rc = SQLITE_OK;
 
@@ -202,25 +202,25 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrflag){
 	if (p->inTrans == TRANS_READ && wrflag)
 		rtxn = p->main_txn;
 
-	rc = db_txn_begin(pBt->env, NULL, wrflag ? 0 : DB_RDONLY, &txn);
+	rc = kvs_txn_begin(pBt->env, NULL, wrflag ? 0 : KVS_RDONLY, &txn);
 	if (rc < 0) goto done;
 	if (wrflag) {
 		p->inTrans = TRANS_WRITE;
 		if (rtxn) {
-			DB_val key[1];
+			KVS_val key[1];
 			BtCursor *pCur;
 			int rc2;
 			/* move all existing cursors to new transaction */
 			for (pCur = p->pCursor; pCur; pCur = pCur->pNext) {
-				DB_cursor *mc = pCur->cursor;
-				rc2 = db_cursor_get(mc, key, NULL, DB_GET_CURRENT);
-				db_cursor_close(mc);
-				int rc3 = db_cursor_open(txn, &mc);
+				KVS_cursor *mc = pCur->cursor;
+				rc2 = kvs_cursor_get(mc, key, NULL, KVS_GET_CURRENT);
+				kvs_cursor_close(mc);
+				int rc3 = kvs_cursor_open(txn, &mc);
 				pCur->cursor = mc;
 				if (0 == rc2)
-					db_cursor_get(mc, key, NULL, DB_SET);
+					kvs_cursor_get(mc, key, NULL, KVS_SET);
 			}
-			db_txn_abort(rtxn);
+			kvs_txn_abort(rtxn);
 		}
 	} else {
 		p->inTrans = TRANS_READ;
@@ -245,33 +245,33 @@ done:
 ** no modifications are made and SQLITE_CORRUPT is returned.
 */
 int sqlite3BtreePutData(BtCursor *pCur, u32 offset, u32 amt, void *z){
-	DB_cursor *const mc = pCur->cursor;
-	DB_val key[1], val[1], put[1];
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_val key[1], val[1], put[1];
 	unsigned char *buf = NULL;
 	int flags;
 	int rc = BtreeTableSchema(pCur->pBtree, pCur->iTable, &flags);
 	if(rc < 0) goto cleanup;
-	if(!(BTREE_INTKEY & flags)) rc = DB_PANIC;
+	if(!(BTREE_INTKEY & flags)) rc = KVS_PANIC;
 	if(rc < 0) goto cleanup;
 
-	rc = db_cursor_current(mc, key, val);
-	if(DB_NOTFOUND == rc) rc = DB_PANIC;
+	rc = kvs_cursor_current(mc, key, val);
+	if(KVS_NOTFOUND == rc) rc = KVS_PANIC;
 	if(rc < 0) goto cleanup;
 
-	uint64_t nKey = db_read_uint64(val); // Consumes part of val
-	if(nKey+offset+amt > val->size) rc = DB_CORRUPTED;
+	uint64_t nKey = kvs_read_uint64(val); // Consumes part of val
+	if(nKey+offset+amt > val->size) rc = KVS_CORRUPTED;
 	if(rc < 0) goto cleanup;
 
-	buf = sqlite3_malloc(DB_VARINT_MAX+val->size);
-	if(!buf) rc = DB_ENOMEM;
+	buf = sqlite3_malloc(KVS_VARINT_MAX+val->size);
+	if(!buf) rc = KVS_ENOMEM;
 	if(rc < 0) goto cleanup;
 	put->data = buf;
 	put->size = 0;
-	db_bind_uint64(put, nKey);
+	kvs_bind_uint64(put, nKey);
 	memcpy((char *)put->data+put->size, val->data, val->size);
 	memcpy((char *)put->data+put->size+nKey+offset, z, amt);
 	put->size += val->size;
-	rc = db_cursor_put(mc, key, put, 0); // DB_GET_CURRENT
+	rc = kvs_cursor_put(mc, key, put, 0); // KVS_GET_CURRENT
 cleanup:
 	sqlite3_free(buf);
 	LOG("rc=%d", rc);
@@ -312,13 +312,13 @@ int sqlite3BtreeCheckpoint(Btree *p, int eMode, int *pnLog, int *pnCkpt){
 ** Clear the current cursor position.
 */
 void sqlite3BtreeClearCursor(BtCursor *pCur){
-  DB_cursor *const mc = pCur->cursor;
-  db_cursor_clear(mc);
+  KVS_cursor *const mc = pCur->cursor;
+  kvs_cursor_clear(mc);
   LOG("done",0);
 }
 
 #if 0
-static int BtreeCompare0(void *ctx, DB_val const *const a, DB_val const *const b)
+static int BtreeCompare0(void *ctx, KVS_val const *const a, KVS_val const *const b)
 {
 	Btree *const p = ctx;
 	BtCursor *const pCur = p->active; // TODO: Even this doesn't work because leveldb has to compact (compare) in the background?
@@ -332,7 +332,7 @@ static int BtreeCompare0(void *ctx, DB_val const *const a, DB_val const *const b
 	sqlite3_free(pFree);
 	return sqlite3VdbeRecordCompare(a->mv_size, a->mv_data, p);
 }
-static int BtreeCompare(void *ctx, DB_val const *const a, DB_val const *const b)
+static int BtreeCompare(void *ctx, KVS_val const *const a, KVS_val const *const b)
 {
 	assert(a->mv_size >= 1);
 	assert(b->mv_size >= 1);
@@ -341,8 +341,8 @@ static int BtreeCompare(void *ctx, DB_val const *const a, DB_val const *const b)
 	if(aa[0] < bb[0]) return +1;
 	if(aa[0] > bb[0]) return -1;
 	if(aa[0] & KEY_SORT_SQLITE) {
-		DB_val const a2 = {a->mv_size-1, aa+1};
-		DB_val const b2 = {b->mv_size-1, bb+1};
+		KVS_val const a2 = {a->mv_size-1, aa+1};
+		KVS_val const b2 = {b->mv_size-1, bb+1};
 		return BtreeCompare0(ctx, &a2, &b2);
 	} else {
 		int x = memcmp(aa, bb, MIN(a->size, b->size));
@@ -390,23 +390,23 @@ int sqlite3BtreeClearTable(Btree *p, int iTable, int *pnChange){
 	assert(p);
 	assert(p->curr_txn);
 	int changes = 0;
-	DB_cursor *cursor = NULL;
-	DB_range range[1];
-	DB_val key[1];
-	int rc = db_cursor_open(p->curr_txn, &cursor);
+	KVS_cursor *cursor = NULL;
+	KVS_range range[1];
+	KVS_val key[1];
+	int rc = kvs_cursor_open(p->curr_txn, &cursor);
 	if(rc < 0) goto cleanup;
 	BTREE_TABLE_RANGE(range, iTable);
-	rc = db_cursor_firstr(cursor, range, key, NULL, +1);
-	for(; rc >= 0; rc = db_cursor_nextr(cursor, range, key, NULL, +1)) {
-		rc = db_del(p->curr_txn, key, 0);
+	rc = kvs_cursor_firstr(cursor, range, key, NULL, +1);
+	for(; rc >= 0; rc = kvs_cursor_nextr(cursor, range, key, NULL, +1)) {
+		rc = kvs_del(p->curr_txn, key, 0);
 		if(rc < 0) goto cleanup;
 		changes++;
 	}
-	if(DB_NOTFOUND == rc) rc = 0;
+	if(KVS_NOTFOUND == rc) rc = 0;
 	if(rc < 0) goto cleanup;
 	if(pnChange) *pnChange = changes;
 cleanup:
-	db_cursor_close(cursor); cursor = NULL;
+	kvs_cursor_close(cursor); cursor = NULL;
 	LOG("rc=%d",rc);
 	return errmap(rc);
 }
@@ -428,14 +428,14 @@ int sqlite3BtreeClose(Btree *p){
 	}
 
 	/* Abort any active transaction */
-	db_txn_abort(p->main_txn);
+	kvs_txn_abort(p->main_txn);
 
 	if (p->isTemp) {
 		unlink(pBt->filename);
 		unlink(pBt->lockname);
 		sqlite3_free(pBt->filename);
 		sqlite3_free(pBt->lockname);
-		db_env_close(pBt->env);
+		kvs_env_close(pBt->env);
 		sqlite3_free(pBt);
 	} else {
 		mutexOpen = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_OPEN);
@@ -445,7 +445,7 @@ int sqlite3BtreeClose(Btree *p){
 			if (pBt->xFreeSchema && pBt->pSchema)
 				pBt->xFreeSchema(pBt->pSchema);
 			sqlite3DbFree(0, pBt->pSchema);
-			db_env_close(pBt->env);
+			kvs_env_close(pBt->env);
 			prev = &sqlite3SharedCacheList;
 			while (*prev != pBt) prev = &(*prev)->pNext;
 			*prev = pBt->pNext;
@@ -475,7 +475,7 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
 	while (*prev != pCur) prev = &((*prev)->pNext);
 	*prev = pCur->pNext;
   }
-  db_cursor_close(pCur->cursor); pCur->cursor = NULL;
+  kvs_cursor_close(pCur->cursor); pCur->cursor = NULL;
 //  sqlite3_free(pCur->index.mv_data);
   sqlite3BtreeClearCursor(pCur);
   LOG("done",0);
@@ -525,7 +525,7 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zMaster){
   BtCursor *pc, *pn;
   int rc = 0;
   if (p->main_txn) {
-    rc = db_txn_commit(p->main_txn);
+    rc = kvs_txn_commit(p->main_txn);
     p->main_txn = NULL;
     p->curr_txn = NULL;
 	p->inTrans = TRANS_NONE;
@@ -581,8 +581,8 @@ int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
 ** corruption) an SQLite error code is returned.
 */
 int sqlite3BtreeCount(BtCursor *pCur, i64 *pnEntry){
-  DB_cursor *const mc = pCur->cursor;
-//  DB_stat stats[1];
+  KVS_cursor *const mc = pCur->cursor;
+//  KVS_stat stats[1];
 //  mdb_stat(mdb_cursor_txn(mc), mdb_cursor_dbi(mc), stats);
 //  *pnEntry = stats->ms_entries;
   *pnEntry = 100; // TODO
@@ -603,7 +603,7 @@ int sqlite3BtreeCount(BtCursor *pCur, i64 *pnEntry){
 **     BTREE_ZERODATA                  Used for SQL indices
 */
 int sqlite3BtreeCreateTable(Btree *const p, int *const piTable, int const flags){
-	DB_val key[1], val[1];
+	KVS_val key[1], val[1];
 	u32 last;
 	int rc = SQLITE_OK;
 
@@ -611,12 +611,12 @@ int sqlite3BtreeCreateTable(Btree *const p, int *const piTable, int const flags)
 	if(0 == last) last++; // Table 1 is auto-generated.
 	last++;
 
-	DB_VAL_STORAGE(key, DB_VARINT_MAX*2);
-	db_bind_uint64(key, TABLE_SCHEMA);
-	db_bind_uint64(key, last);
-	DB_VAL_STORAGE(val, DB_VARINT_MAX);
-	db_bind_uint64(val, flags);
-	rc = errmap(db_put(p->curr_txn, key, val, 0));
+	KVS_VAL_STORAGE(key, KVS_VARINT_MAX*2);
+	kvs_bind_uint64(key, TABLE_SCHEMA);
+	kvs_bind_uint64(key, last);
+	KVS_VAL_STORAGE(val, KVS_VARINT_MAX);
+	kvs_bind_uint64(val, flags);
+	rc = errmap(kvs_put(p->curr_txn, key, val, 0));
 	if(rc < 0) goto cleanup;
 
 	rc = sqlite3BtreeUpdateMeta(p, BTREE_LARGEST_ROOT_PAGE, last);
@@ -661,8 +661,8 @@ int sqlite3BtreeCursor(
   struct KeyInfo *pKeyInfo,                   /* First arg to xCompare() */
   BtCursor *pCur                              /* Write new cursor here */
 ){
-	DB_cursor *mc = NULL;
-	int rc = db_cursor_open(p->curr_txn, &mc);
+	KVS_cursor *mc = NULL;
+	int rc = kvs_cursor_open(p->curr_txn, &mc);
 	if(rc < 0) goto cleanup;
 	pCur->cursor = mc;
 	pCur->pNext = p->pCursor;
@@ -684,9 +684,9 @@ cleanup:
 ** integer *pHasMoved is set to one if the cursor has moved and 0 if not.
 */
 int sqlite3BtreeCursorHasMoved(BtCursor *pCur, int *pHasMoved){
-	DB_cursor *const mc = pCur->cursor;
-	int rc = db_cursor_current(mc, NULL, NULL);
-	if(DB_NOTFOUND == rc) {
+	KVS_cursor *const mc = pCur->cursor;
+	int rc = kvs_cursor_current(mc, NULL, NULL);
+	if(KVS_NOTFOUND == rc) {
 		*pHasMoved = 1;
 		rc = 0;
 	} else if(rc >= 0) {
@@ -736,11 +736,11 @@ void sqlite3BtreeCursorZero(BtCursor *p){
 ** the available payload.
 */
 int sqlite3BtreeData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
-	DB_cursor *const mc = pCur->cursor;
-	DB_val val[1];
-	int rc = db_cursor_current(mc, NULL, val);
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_val val[1];
+	int rc = kvs_cursor_current(mc, NULL, val);
 	if(rc < 0) goto cleanup;
-	if(offset+amt > val->size) rc = DB_CORRUPTED;
+	if(offset+amt > val->size) rc = KVS_CORRUPTED;
 	if(rc < 0) goto cleanup;
 	memcpy(pBuf, (char *)val->data+offset, amt);
 cleanup:
@@ -757,19 +757,19 @@ cleanup:
 ** in the common case where no overflow pages are used.
 */
 const void *sqlite3BtreeKeyFetch(BtCursor *pCur, int *pAmt){
-	DB_cursor *const mc = pCur->cursor;
+	KVS_cursor *const mc = pCur->cursor;
 	int flags;
-	DB_val key[1], val[1];
+	KVS_val key[1], val[1];
 	int amt = 0;
 	void const *data = NULL;
 	int rc = BtreeTableSchema(pCur->pBtree, pCur->iTable, &flags);
 	if(rc < 0) goto cleanup;
 	if(BTREE_INTKEY & flags) goto cleanup; // Meaningless.
 
-	rc = db_cursor_current(mc, key, val);
+	rc = kvs_cursor_current(mc, key, val);
 	if(rc < 0) goto cleanup;
-	uint64_t nKey = db_read_uint64(val);
-	if(nKey > val->size) rc = DB_CORRUPTED;
+	uint64_t nKey = kvs_read_uint64(val);
+	if(nKey > val->size) rc = KVS_CORRUPTED;
 	if(rc < 0) goto cleanup;
 	amt = nKey;
 	data = val->data;
@@ -779,23 +779,23 @@ cleanup:
 	return data;
 }
 const void *sqlite3BtreeDataFetch(BtCursor *pCur, int *pAmt){
-	DB_cursor *const mc = pCur->cursor;
+	KVS_cursor *const mc = pCur->cursor;
 	int flags;
-	DB_val val[1];
+	KVS_val val[1];
 	int amt = 0;
 	void const *data = NULL;
 	int rc = BtreeTableSchema(pCur->pBtree, pCur->iTable, &flags);
 	if(rc < 0) goto cleanup;
 	if(BTREE_ZERODATA & flags) goto cleanup;
 
-	rc = db_cursor_current(mc, NULL, val);
+	rc = kvs_cursor_current(mc, NULL, val);
 	if(rc < 0) goto cleanup;
 	if(BTREE_INTKEY & flags) {
 		amt = val->size;
 		data = val->data;
 	} else {
-		uint64_t nKey = db_read_uint64(val);
-		if(nKey > val->size) rc = DB_CORRUPTED;
+		uint64_t nKey = kvs_read_uint64(val);
+		if(nKey > val->size) rc = KVS_CORRUPTED;
 		if(rc < 0) goto cleanup;
 		amt = val->size - nKey;
 		data = (char *)val->data + nKey;
@@ -831,8 +831,8 @@ int sqlite3BtreeDataSize(BtCursor *pCur, u32 *pSize){
 ** is left pointing at a arbitrary location.
 */
 int sqlite3BtreeDelete(BtCursor *pCur){
-	DB_cursor *const mc = pCur->cursor;
-	int rc = db_cursor_del(mc, 0);
+	KVS_cursor *const mc = pCur->cursor;
+	int rc = kvs_cursor_del(mc, 0);
 	LOG("rc=%d",rc);
 	return errmap(rc);
 }
@@ -848,11 +848,11 @@ int sqlite3BtreeDelete(BtCursor *pCur){
 int sqlite3BtreeDropTable(Btree *p, int iTable, int *piMoved){
   int rc = sqlite3BtreeClearTable(p, iTable, NULL);
   if(rc < 0) goto cleanup;
-  DB_val key[1];
-  DB_VAL_STORAGE(key, DB_VARINT_MAX*2);
-  db_bind_uint64(key, TABLE_SCHEMA);
-  db_bind_uint64(key, TABLE_START + iTable);
-  rc = db_del(p->curr_txn, key, 0);
+  KVS_val key[1];
+  KVS_VAL_STORAGE(key, KVS_VARINT_MAX*2);
+  kvs_bind_uint64(key, TABLE_SCHEMA);
+  kvs_bind_uint64(key, TABLE_START + iTable);
+  rc = kvs_del(p->curr_txn, key, 0);
   if(rc < 0) goto cleanup;
 cleanup:
   *piMoved = 0;
@@ -868,8 +868,8 @@ cleanup:
 ** the first entry.  TRUE is also returned if the table is empty.
 */
 int sqlite3BtreeEof(BtCursor *pCur){
-	DB_cursor *const mc = pCur->cursor;
-	int rc = db_cursor_get(mc, NULL, NULL, DB_GET_CURRENT);
+	KVS_cursor *const mc = pCur->cursor;
+	int rc = kvs_cursor_get(mc, NULL, NULL, KVS_GET_CURRENT);
 	return rc < 0;
 }
 
@@ -878,13 +878,13 @@ int sqlite3BtreeEof(BtCursor *pCur){
 ** or set *pRes to 1 if the table is empty.
 */
 int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
-	DB_cursor *const mc = pCur->cursor;
-	DB_range range[1];
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_range range[1];
 	BTREE_TABLE_RANGE(range, pCur->iTable);
-	int rc = db_cursor_firstr(mc, range, NULL, NULL, +1);
+	int rc = kvs_cursor_firstr(mc, range, NULL, NULL, +1);
 	if(rc >= 0) {
 		*pRes = 0;
-	} else if(DB_NOTFOUND == rc) {
+	} else if(KVS_NOTFOUND == rc) {
 		*pRes = 1;
 		rc = 0;
 	}
@@ -953,15 +953,15 @@ void sqlite3BtreeGetMeta(Btree *p, int idx, u32 *pMeta){
 	assert(idx >= 0);
 	assert(idx < NUMMETA);
 	uint64_t meta = 0;
-	DB_val key[1], val[1];
+	KVS_val key[1], val[1];
 	int rc = 0;
 	if(0 == idx) goto cleanup; // Number of free pages
-	DB_VAL_STORAGE(key, DB_VARINT_MAX*2);
-	db_bind_uint64(key, TABLE_META);
-	db_bind_uint64(key, idx);
-	rc = db_get(p->curr_txn, key, val);
+	KVS_VAL_STORAGE(key, KVS_VARINT_MAX*2);
+	kvs_bind_uint64(key, TABLE_META);
+	kvs_bind_uint64(key, idx);
+	rc = kvs_get(p->curr_txn, key, val);
 	if(rc < 0) goto cleanup;
-	meta = db_read_uint64(val);
+	meta = kvs_read_uint64(val);
 cleanup:
 	*pMeta = meta;
 	LOG("idx=%d, *pMeta=%u",idx,*pMeta);
@@ -996,7 +996,7 @@ int sqlite3BtreeMaxPageCount(Btree *p, int mxPage){
   LOG("done",0);
   if (mxPage > 0) {
     size_t x = mxPage * 4096;
-    db_env_set_config(p->pBt->env, DB_CFG_MAPSIZE, &x);
+    kvs_env_set_config(p->pBt->env, KVS_CFG_MAPSIZE, &x);
     p->pBt->mxPage = mxPage;
   }
   return p->pBt->mxPage; // TODO: Initialize on creation
@@ -1153,7 +1153,7 @@ static void squashIndexKey(UnpackedRecord *pun, int file_format, MDB_val *key)
 #endif
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-static int BtreeRawKey(DB_txn *const txn, DB_val *const key, UnpackedRecord const *const p) {
+static int BtreeRawKey(KVS_txn *const txn, KVS_val *const key, UnpackedRecord const *const p) {
 	assert(key);
 	assert(key->data);
 	assert(p);
@@ -1163,19 +1163,19 @@ static int BtreeRawKey(DB_txn *const txn, DB_val *const key, UnpackedRecord cons
 		// TODO: Most of these are broken
 		// Get better serialization code from SQLite4?
 		if(mem->flags & MEM_Null) {
-			db_bind_uint64(key, 0);
+			kvs_bind_uint64(key, 0);
 		} else if(mem->flags & MEM_Real) {
-			db_bind_uint64(key, 1);
-			db_bind_double(key, mem->r);
+			kvs_bind_uint64(key, 1);
+			kvs_bind_double(key, mem->r);
 		} else if(mem->flags & MEM_Int) {
-			db_bind_uint64(key, 1);
-			db_bind_double(key, (double)mem->u.i);
+			kvs_bind_uint64(key, 1);
+			kvs_bind_double(key, (double)mem->u.i);
 		} else if(mem->flags & MEM_Str) {
-			db_bind_uint64(key, 2);
-			db_bind_string_len(key, mem->z, mem->n, 0, txn);
+			kvs_bind_uint64(key, 2);
+			kvs_bind_string_len(key, mem->z, mem->n, 0, txn);
 		} else if(mem->flags & MEM_Blob) {
-			db_bind_uint64(key, 3);
-			db_bind_blob(key, mem->z, MIN(mem->n, 64));
+			kvs_bind_uint64(key, 3);
+			kvs_bind_blob(key, mem->z, MIN(mem->n, 64));
 		} else {
 			sqlite3DebugPrintf("Unrecognized column type %d\n", mem->flags);
 			assert(0);
@@ -1217,9 +1217,9 @@ int sqlite3BtreeInsert(
 ){
 	assert(pCur);
 	assert(nZero >= 0);
-	DB_cursor *const mc = pCur->cursor;
+	KVS_cursor *const mc = pCur->cursor;
 	int flags;
-	DB_val key[1], val[1];
+	KVS_val key[1], val[1];
 	char *unpacked = NULL;
 	char *payload = NULL;
 	int rc = 0;
@@ -1231,34 +1231,34 @@ int sqlite3BtreeInsert(
 		nData = 0;
 	}
 
-	DB_VAL_STORAGE(key, MDB_MAXKEYSIZE); // TODO: Not guaranteed to be enough
-	db_bind_uint64(key, TABLE_START + pCur->iTable);
+	KVS_VAL_STORAGE(key, MDB_MAXKEYSIZE); // TODO: Not guaranteed to be enough
+	kvs_bind_uint64(key, TABLE_START + pCur->iTable);
 	if(BTREE_INTKEY & flags) {
-		db_bind_sint64(key, nKey);
+		kvs_bind_sint64(key, nKey);
 		val->size = nData;
 		val->data = (void *)pData;
 	} else {
 		UnpackedRecord *p = sqlite3VdbeAllocUnpackedRecord(pCur->pKeyInfo, NULL, 0, &unpacked);
-		if(!p) rc = DB_ENOMEM;
+		if(!p) rc = KVS_ENOMEM;
 		if(rc < 0) goto cleanup;
 		sqlite3VdbeRecordUnpack(pCur->pKeyInfo, nKey, pKey, p);
 		rc = BtreeRawKey(pCur->pBtree->curr_txn, key, p);
 		if(rc < 0) goto cleanup;
 
-		payload = sqlite3_malloc(DB_VARINT_MAX+nKey+nData);
-		if(!payload) rc = DB_ENOMEM;
+		payload = sqlite3_malloc(KVS_VARINT_MAX+nKey+nData);
+		if(!payload) rc = KVS_ENOMEM;
 		if(rc < 0) goto cleanup;
 		val->size = 0;
 		val->data = payload;
-		db_bind_uint64(val, nKey);
-		db_bind_blob(val, pKey, nKey);
-		db_bind_blob(val, pData, nData);
+		kvs_bind_uint64(val, nKey);
+		kvs_bind_blob(val, pKey, nKey);
+		kvs_bind_blob(val, pData, nData);
 	}
 	assert(key->size+nZero <= MDB_MAXKEYSIZE);
 	memset((char *)key->data+key->size, 0, nZero);
 	key->size += nZero;
 
-	rc = db_cursor_put(mc, key, val, 0);
+	rc = kvs_cursor_put(mc, key, val, 0);
 
 cleanup:
 	LOG("rc=%d",rc);
@@ -1330,14 +1330,14 @@ int sqlite3BtreeIsInBackup(Btree *p){
 ** the available payload.
 */
 int sqlite3BtreeKey(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
-	DB_cursor *const mc = pCur->cursor;
-	DB_val val[1];
-	int rc = db_cursor_current(mc, NULL, val);
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_val val[1];
+	int rc = kvs_cursor_current(mc, NULL, val);
 	if(rc < 0) goto cleanup;
-	uint64_t const nKey = db_read_uint64(val);
-	if(nKey > val->size) rc = DB_CORRUPTED;
+	uint64_t const nKey = kvs_read_uint64(val);
+	if(nKey > val->size) rc = KVS_CORRUPTED;
 	if(rc < 0) goto cleanup;
-	if(offset+amt > nKey) rc = DB_CORRUPTED;
+	if(offset+amt > nKey) rc = KVS_CORRUPTED;
 	if(rc < 0) goto cleanup;
 	memcpy(pBuf, val->data+offset, amt);
 cleanup:
@@ -1358,20 +1358,20 @@ cleanup:
 ** This routine cannot fail.  It always returns SQLITE_OK.  
 */
 int sqlite3BtreeKeySize(BtCursor *pCur, i64 *pSize){
-	DB_cursor *const mc = pCur->cursor;
+	KVS_cursor *const mc = pCur->cursor;
 	i64 size = 0;
 	int flags;
-	DB_val key[1], val[1];
+	KVS_val key[1], val[1];
 	int rc = BtreeTableSchema(pCur->pBtree, pCur->iTable, &flags);
 	if(rc < 0) goto cleanup;
-	rc = db_cursor_current(mc, key, val);
+	rc = kvs_cursor_current(mc, key, val);
 	if(rc < 0) goto cleanup;
 	if(BTREE_INTKEY & flags) {
-		uint64_t const iTable = db_read_uint64(key);
-		db_assert(iTable-TABLE_START == pCur->iTable);
-		size = db_read_sint64(key);
+		uint64_t const iTable = kvs_read_uint64(key);
+		kvs_assert(iTable-TABLE_START == pCur->iTable);
+		size = kvs_read_sint64(key);
 	} else {
-		size = db_read_uint64(val);
+		size = kvs_read_uint64(val);
 	}
 cleanup:
 	*pSize = size;
@@ -1384,13 +1384,13 @@ cleanup:
 ** or set *pRes to 1 if the table is empty.
 */
 int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
-	DB_cursor *const mc = pCur->cursor;
-	DB_range range[1];
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_range range[1];
 	BTREE_TABLE_RANGE(range, pCur->iTable);
-	int rc = db_cursor_firstr(mc, range, NULL, NULL, -1);
+	int rc = kvs_cursor_firstr(mc, range, NULL, NULL, -1);
 	if(rc >= 0) {
 		*pRes = 0;
-	} else if(DB_NOTFOUND == rc) {
+	} else if(KVS_NOTFOUND == rc) {
 		*pRes = 1;
 		rc = 0;
 	}
@@ -1451,32 +1451,32 @@ int sqlite3BtreeMovetoUnpacked(
   int biasRight,           /* If true, bias the search to the high end */
   int *pRes                /* Write search results here */
 ){
-	DB_cursor *const mc = pCur->cursor;
+	KVS_cursor *const mc = pCur->cursor;
 	int flags;
-	DB_range range[1];
-	DB_val key[1], res[1];
+	KVS_range range[1];
+	KVS_val key[1], res[1];
 	int rc = 0;
 	rc = BtreeTableSchema(pCur->pBtree, pCur->iTable, &flags);
 	if(rc < 0) goto cleanup;
 
 	BTREE_TABLE_RANGE(range, pCur->iTable);
 
-	DB_VAL_STORAGE(key, MDB_MAXKEYSIZE);
-	db_bind_uint64(key, TABLE_START + pCur->iTable);
+	KVS_VAL_STORAGE(key, MDB_MAXKEYSIZE);
+	kvs_bind_uint64(key, TABLE_START + pCur->iTable);
 	if(BTREE_INTKEY & flags) {
-		db_bind_sint64(key, intKey);
+		kvs_bind_sint64(key, intKey);
 	} else {
 		rc = BtreeRawKey(pCur->pBtree->curr_txn, key, pUnKey);
 		if(rc < 0) goto cleanup;
 	}
 
 	*res = *key;
-	rc = db_cursor_seekr(mc, range, res, NULL, +1);
-	if(DB_NOTFOUND == rc) {
+	rc = kvs_cursor_seekr(mc, range, res, NULL, +1);
+	if(KVS_NOTFOUND == rc) {
 		*pRes = 1;
 		rc = 0;
 	} else if(rc >= 0) {
-		*pRes = db_cursor_cmp(mc, res, key);
+		*pRes = kvs_cursor_cmp(mc, res, key);
 	}
 cleanup:
 	LOG("rc=%d, *pRes=%d", rc, *pRes);
@@ -1490,13 +1490,13 @@ cleanup:
 ** this routine was called, then set *pRes=1.
 */
 int sqlite3BtreeNext(BtCursor *pCur, int *pRes){
-	DB_cursor *const mc = pCur->cursor;
-	DB_range range[1];
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_range range[1];
 	BTREE_TABLE_RANGE(range, pCur->iTable);
-	int rc = db_cursor_nextr(mc, range, NULL, NULL, +1);
+	int rc = kvs_cursor_nextr(mc, range, NULL, NULL, +1);
 	if(rc >= 0) {
 		*pRes = 0;
-	} else if(DB_NOTFOUND == rc) {
+	} else if(KVS_NOTFOUND == rc) {
 		*pRes = 1;
 		rc = 0;
 	}
@@ -1593,8 +1593,8 @@ int sqlite3BtreeOpen(
 		rc = SQLITE_NOMEM;
 		goto done;
 	}
-//	rc = db_env_create_base(p->isTemp ? "mdb" : "leveldb", &pBt->env);
-	rc = db_env_create_base("mdb", &pBt->env);
+//	rc = kvs_env_create_base(p->isTemp ? "mdb" : "leveldb", &pBt->env);
+	rc = kvs_env_create_base("mdb", &pBt->env);
 	if (rc) {
 		if (!p->isTemp) {
 			sqlite3_mutex_leave(mutexOpen);
@@ -1603,13 +1603,13 @@ int sqlite3BtreeOpen(
 		goto done;
 	}
 	size_t mapsize = 256*1048576;
-	db_env_set_config(pBt->env, DB_CFG_MAPSIZE, &mapsize);
+	kvs_env_set_config(pBt->env, KVS_CFG_MAPSIZE, &mapsize);
 	if (vfsFlags & SQLITE_OPEN_READONLY)
-		eflags |= DB_RDONLY;
+		eflags |= KVS_RDONLY;
 	if (vfsFlags & (SQLITE_OPEN_DELETEONCLOSE|SQLITE_OPEN_TEMP_DB|
 		SQLITE_OPEN_TRANSIENT_DB))
-		eflags |= DB_NOSYNC;
-	rc = db_env_open(pBt->env, dirPathName, eflags, SQLITE_DEFAULT_FILE_PERMISSIONS);
+		eflags |= KVS_NOSYNC;
+	rc = kvs_env_open(pBt->env, dirPathName, eflags, SQLITE_DEFAULT_FILE_PERMISSIONS);
 	if (rc) {
 		if (!p->isTemp)
 			sqlite3_mutex_leave(mutexOpen);
@@ -1669,13 +1669,13 @@ Pager *sqlite3BtreePager(Btree *p){
 ** this routine was called, then set *pRes=1.
 */
 int sqlite3BtreePrevious(BtCursor *pCur, int *pRes){
-	DB_cursor *const mc = pCur->cursor;
-	DB_range range[1];
+	KVS_cursor *const mc = pCur->cursor;
+	KVS_range range[1];
 	BTREE_TABLE_RANGE(range, pCur->iTable);
-	int rc = db_cursor_nextr(mc, range, NULL, NULL, -1);
+	int rc = kvs_cursor_nextr(mc, range, NULL, NULL, -1);
 	if(rc >= 0) {
 		*pRes = 0;
-	} else if(DB_NOTFOUND == rc) {
+	} else if(KVS_NOTFOUND == rc) {
 		*pRes = 1;
 		rc = 0;
 	}
@@ -1707,26 +1707,26 @@ int sqlite3BtreeRollback(Btree *p, int tripCode){
 ** transaction remains open.
 */
 int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
-  DB_txn *parent;
+  KVS_txn *parent;
   int rc = SQLITE_OK;
 
   if (!p->curr_txn)
     goto done;
 
-  rc = errmap(db_txn_parent(p->curr_txn, &parent));
+  rc = errmap(kvs_txn_parent(p->curr_txn, &parent));
   if(SQLITE_OK != rc) goto done;
 
   if (op == SAVEPOINT_ROLLBACK) {
     if (iSavepoint == -1) {
-      db_txn_abort(p->main_txn);
+      kvs_txn_abort(p->main_txn);
     } else {
-      db_txn_abort(p->curr_txn);
+      kvs_txn_abort(p->curr_txn);
     }
   } else {
     if (iSavepoint == -1)
-      rc = db_txn_commit(p->main_txn);
+      rc = kvs_txn_commit(p->main_txn);
     else
-      rc = db_txn_commit(p->curr_txn);
+      rc = kvs_txn_commit(p->curr_txn);
   }
   if (iSavepoint == -1) {
     p->main_txn = NULL;
@@ -1879,10 +1879,10 @@ int sqlite3BtreeSetSafetyLevel(
   int ckptFullSync       /* PRAGMA checkpoint_fullfync */
 ){
 	unsigned flags = 0;
-	db_env_get_config(p->pBt->env, DB_CFG_FLAGS, &flags);
-	if(level < 2) flags |= DB_NOSYNC;
-	else flags &= ~DB_NOSYNC;
-	int rc = db_env_set_config(p->pBt->env, DB_CFG_FLAGS, &flags);
+	kvs_env_get_config(p->pBt->env, KVS_CFG_FLAGS, &flags);
+	if(level < 2) flags |= KVS_NOSYNC;
+	else flags &= ~KVS_NOSYNC;
+	int rc = kvs_env_set_config(p->pBt->env, KVS_CFG_FLAGS, &flags);
 	LOG("done", 0);
 	return SQLITE_OK;
 }
@@ -1909,8 +1909,8 @@ void sqlite3BtreeCursorHints(BtCursor *pCsr, unsigned int mask) {
 int sqlite3BtreeSyncDisabled(Btree *p){
 	unsigned flags = 0;
 	LOG("done",0);
-	db_env_get_config(p->pBt->env, DB_CFG_FLAGS, &flags);
-	return (flags & DB_NOSYNC) != 0;
+	kvs_env_get_config(p->pBt->env, KVS_CFG_FLAGS, &flags);
+	return (flags & KVS_NOSYNC) != 0;
 }
 
 /*
@@ -1936,13 +1936,13 @@ void sqlite3BtreeTripAllCursors(Btree *pBtree, int errCode){
 */
 int sqlite3BtreeUpdateMeta(Btree *p, int idx, u32 iMeta){
 	assert(idx > 0 && idx < NUMMETA);
-	DB_val key[1], val[1];
-	DB_VAL_STORAGE(key, DB_VARINT_MAX*2);
-	db_bind_uint64(key, TABLE_META);
-	db_bind_uint64(key, idx);
-	DB_VAL_STORAGE(val, DB_VARINT_MAX);
-	db_bind_uint64(val, iMeta);
-	int rc = db_put(p->curr_txn, key, val, 0);
+	KVS_val key[1], val[1];
+	KVS_VAL_STORAGE(key, KVS_VARINT_MAX*2);
+	kvs_bind_uint64(key, TABLE_META);
+	kvs_bind_uint64(key, idx);
+	KVS_VAL_STORAGE(val, KVS_VARINT_MAX);
+	kvs_bind_uint64(val, iMeta);
+	int rc = kvs_put(p->curr_txn, key, val, 0);
 	LOG("rc=%d, idx=%d, iMeta=%u",rc,idx,iMeta);
 	return errmap(rc);
 }
